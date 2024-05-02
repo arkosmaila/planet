@@ -1,0 +1,262 @@
+---
+title: "Advanced disease modeling - Practical"
+author: "Clara Champagne"
+date: "2024-03-21"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Motivation
+We have data on a flu epidemic in an English boarding school in 1978 source. Among the 763 boys in the school, 512 were infected and put in bed during their infection, which allows us to follow the number of infected boys over time.
+```{r}
+time = c(3,4,5,6,7,8,9,10,11,12,13,14,15)
+infected = c(31,82,216,299,269,242,190,125,81,52,25,22,7)
+data=cbind(time, infected)
+```
+
+The objective of this exercise is to recover the parameters associated with this epidemic. We use for this an SIR-type model, which can be simulated with the following code:
+
+```{r warning=FALSE, message=FALSE}
+library(deSolve)
+library(tidyr)
+library(ggplot2)
+```
+
+
+## SIR model
+```{r}
+SIR<-function(t,init,parms){
+  # Size of each compartment and of the population
+  S = init[1]
+  I = init[2]
+  R = init[3]
+  N = S+I+R
+  # parameters
+  lambda = parms["lambda"]
+  gamma = parms["gamma"]
+  ##variations
+  dS=-lambda*S*I/N
+  dI=lambda*S*I/N-gamma*I
+  dR=gamma*I
+  res = c(dS,dI,dR)
+  list(res)
+}
+
+simulate_SIR=function(parameters){
+  #parameters
+  parms = c(parameters["lambda"],parameters["gamma"])
+  N=parameters["N"]
+  #initial conditions
+  init <- c(N-parameters["initI"],parameters["initI"],0)
+  #simulation
+  temps <- seq(0,15)
+  solveSIR <- lsoda(y =init, times=temps, func = SIR,
+  parms = parms)
+  solutionSIR=as.data.frame(solveSIR)
+  names(solutionSIR)=c("time","S","I","R")
+  #merge with data
+  sir_data=merge(data,solutionSIR)
+  return(sir_data)
+}
+theta_init =c("lambda"=1.7,"gamma"=0.44,"initI"=1, "N"=763)
+simul=simulate_SIR(theta_init)
+simul
+```
+
+The column “infected” contains the data. The columns S, I and R correspond to the number of individuals in the compartments S, I and R respectively. The column time indicates the time in days.
+
+## Question 1
+Using the previous code, visualise the number of infected boys over time and compare the data with model simulation for various parameters
+
+```{r}
+simul %>% 
+  ggplot(aes(time, infected)) + geom_point(col = "red") + 
+  geom_line(aes(time, I), col = "blue") + theme_bw()
+
+
+plot(infected ~ time, data = simul, col = "red", pch = 16)
+lines(I ~ time, data = simul, col = "blue")
+```
+
+
+## Question 2
+We assume that the number of infected boys observed each day follows a **Poisson distribution** whose parameter is the number of infected simulated by the model.
+
+Prior distributions are chosen as follows: Unif[0,2] for the transmission rate $\lambda$, Unif[0,1] for the recovery rate $\gamma$.
+
+a) With R, write a function that calculates the model's likelihood for a given set of parameters. Write another function that calculates the model's log-likelihood (logarithm of the likelihood).
+
+```{r}
+# LIKELIHOOD
+get_lk = function(parameters){
+  simul=simulate_SIR(parameters)
+  simul$llk = dpois(simul$infected, round(simul$I), log=F)
+  return(prod(simul$llk))
+}
+
+# LOG LIKELIHOOD
+get_llk = function(parameters){
+  simul=simulate_SIR(parameters)
+  simul$llk = dpois(simul$infected, round(simul$I), log=T)
+  return(sum(simul$llk))
+}
+
+#for(i in 1:nrow(simul)){
+#  print(dpois(simul$infected[i], round(simul$I[i]), log=T))
+#}
+
+#dpois(simul$infected, round(simul$I), log=T)
+```
+
+b) With R, write a function that calculates the model's posterior distribution for a given set of parameters.
+
+Write another function that calculates the model's log-posterior (logarithm of the posterior).
+
+**Help: These R functions might be helpful: dunif, dpois.**
+
+```{r}
+# LOG PRIOR
+get_prior = function(parameters){
+  prior_lambda=dunif(parameters["lambda"],min=0,max=2, log = T)
+  prior_gamma=dunif(parameters["gamma"],min=0,max=1, log = T)
+  return(as.numeric(prior_lambda+prior_gamma))
+}
+# POSTERIOR #only the numerator (because the denominator will cancel out later)
+get_posterior=function(parameters){
+  return(exp(get_prior(parameters)+get_llk(parameters)))
+}
+# LOG POSTERIOR
+get_logposterior=function(parameters){
+  return((get_prior(parameters)+get_llk(parameters)))
+}
+```
+
+
+## Question 3
+Implement the Metropolis-Hastings algorithm in R. We can use the following proposal distribution:
+
+```{r}
+# SIMULATE PARAMETER SET FROM PROPOSAL
+proposal = function(theta){
+  return(c("lambda"=rnorm(1,mean=theta[["lambda"]],sd=0.05),
+           "gamma"=rnorm(1,mean=theta[["gamma"]],sd=0.05), 
+           "initI"=1, "N"=763)
+         )
+}
+
+proposal_density = function(theta_before, theta_after){
+  return(
+    dnorm(theta_after[["lambda"]],mean=theta_before[["lambda"]],sd=0.05)*
+      dnorm(theta_after[["gamma"]],mean=theta_before[["gamma"]],sd=0.05)
+    )
+}
+```
+
+
+
+```{r}
+#METROPOLIS HASTINGS
+MCMC=function(nb_iter, theta_init=NULL, my_seed=1){
+  set.seed(my_seed)
+  u=runif(nb_iter-1,0,1) # random number to sample from MH probability
+  
+  # initialisation
+  theta = theta_init
+  posterior_numerator= get_posterior(theta)
+  trace=as.data.frame(t(theta))
+  posterior=c(posterior_numerator)
+  
+  # iterations
+  for (i in 2:nb_iter){
+    # Sample new theta
+    theta_new =proposal(theta)
+    posterior_numerator_new=get_posterior(theta_new)
+    # accept new theta with metropolis hastings probability
+    p=min(1,posterior_numerator_new*proposal_density(theta_new,theta)/(posterior*proposal_density(theta,theta_new)))
+    if(u[i-1]<p & is.na(p)==FALSE){
+      theta=theta_new
+      posterior_numerator=posterior_numerator_new
+    }
+  trace=rbind(trace,as.data.frame(t(theta)))
+  posterior=rbind(posterior,posterior_numerator)
+  }
+  
+  trace$iter=seq(1:nb_iter)
+  return(list("trace"=trace,"posterior"=posterior))
+}
+```
+
+**Help: in order to evaluate the acceptance probability, you can use this function: runif**
+
+## Question 4
+Apply the algorithm to the data and comment the results. Can you check if the MCMC chain has converged?
+```{r}
+theta_init=c("lambda"=1.3,"gamma"=0.2,"initI"=1, "N"=763)
+my_mcmc=MCMC(nb_iter=5000, theta_init=theta_init, my_seed=1)
+theta_fit=my_mcmc$trace
+mean(theta_fit$lambda)
+theta_init2=c("lambda"=1.2,"gamma"=0.5,"initI"=1, "N"=763)
+my_mcmc2=MCMC(nb_iter=5000, theta_init=theta_init2, my_seed=1)
+theta_fit2=my_mcmc2$trace
+mean(theta_fit2$lambda)
+
+
+theta_fit %>% pivot_longer(cols=c(lambda, gamma)) %>%
+ggplot() +
+geom_line(aes(x=iter, y=value))+
+geom_line(data= theta_fit2 %>% pivot_longer(cols=c(lambda, gamma)),aes(x=iter, y=value), col="red")+
+facet_wrap(. ~name, scales="free")
+
+
+theta_fit%>% pivot_longer(cols=c(lambda, gamma))%>%
+ggplot()+
+geom_histogram(aes(x=value), alpha=0.5)+
+facet_wrap(. ~name, scales="free")
+```
+
+
+
+```{r}
+library(tidyverse)
+theta_burn <- theta_fit %>% dplyr::filter(iter > 100)
+theta_final <- theta_burn %>%
+dplyr::summarise(lambda_m=median(lambda),
+gamma_m=median(gamma),
+lambda_025=quantile(lambda, probs = 0.025),
+gamma_025=quantile(gamma, probs = 0.025),
+lambda_975=quantile(lambda, probs = 0.975),
+gamma_975=quantile(gamma, probs = 0.975))
+theta_final
+```
+
+
+## Question 5
+Compare the fitted model and the data. Try to include uncertainty in fitted parameters in your simulations.
+```{r}
+
+# run the model for all parameter sets in trace
+all_traj=data.frame()
+for(i in 1:nrow(theta_burn)){
+  param=c("lambda"=theta_burn$lambda[i], "gamma"=theta_burn$gamma[i],
+"initI"=theta_burn$initI[i], "N"=theta_burn$N[i])
+  this.traj=simulate_SIR(parameters = param)
+  this.traj$iter=i
+  all_traj=rbind(all_traj, this.traj)
+}
+library(dplyr)
+# summarise all the trajectories to get a median and ribbon
+all_traj %>% group_by(time, infected)%>%
+  dplyr::summarise(I_median=median(I),
+    I_025=quantile(I, probs = 0.025),
+    I_975=quantile(I, probs = 0.975), .groups = "drop"
+  )%>%
+ggplot(aes(x=time))+
+geom_line(aes(y=I_median))+
+geom_ribbon(aes(ymin=I_025, ymax=I_975), alpha=0.5 , fill="dodgerblue")+
+geom_point(aes(y=infected), color="red")
+```
+

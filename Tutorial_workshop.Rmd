@@ -1,0 +1,199 @@
+---
+title: "Tutorial_workshop_1"
+author: "Smaila Amoanu"
+date: "2024-03-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+time = c(3,4,5,6,7,8,9,10,11,12,13,14,15)
+infected = c(31,82,216,299,269,242,190,125,81,52,25,22,7)
+data=cbind(time, infected)
+```
+
+```{r}
+##SIR model
+SIR<-function(t,x,parms){
+##taille de chaque compartiment et de la population
+S = x[1]
+I = x[2]
+R = x[3]
+N = x[1]+x[2]+x[3]
+##valeurs des parametres
+lambda = parms["lambda"]
+gamma = parms["gamma"]
+##variations
+dS=-lambda*S*I/N
+dI=lambda*S*I/N-gamma*I
+dR=gamma*I
+res = c(dS,dI,dR)
+list(res)
+}
+```
+
+
+```{r}
+simulate_SIR=function(parameters){
+#parameters
+parms = c(parameters["lambda"],parameters["gamma"])
+N=parameters["N"]
+#initial conditions
+init <- c(N-parameters["initI"],parameters["initI"],0)
+
+1
+
+#simulation
+temps <- seq(0,15)
+solveSIR <- lsoda(y =init, times=temps, func = SIR,
+
+parms = parms)
+solutionSIR=as.data.frame(solveSIR)
+names(solutionSIR)=c("time","S","I","R")
+#merge with data
+sir_data=merge(data,solutionSIR)
+return(sir_data)
+}
+```
+
+
+```{r}
+theta_init =c("lambda"=1.7,"gamma"=0.44,"initI"=1, "N"=763)
+simul=simulate_SIR(theta_init)
+simul
+```
+
+
+Question 1: Visualizing the number of infected boys over time
+
+```{r}
+library(ggplot2)
+
+# Plotting the data and model simulation
+ggplot(simul, aes(x = time)) +
+  geom_line(aes(y = infected, color = "Data"), size = 1.2) +
+  geom_line(aes(y = I, color = "Model"), linetype = "dashed", size = 1.2) +
+  scale_color_manual(values = c("Data" = "blue", "Model" = "red")) +
+  labs(x = "Time (days)", y = "Number of infected boys", color = "Type") +
+  theme_minimal()
+
+```
+
+```{r}
+simul %>% 
+  ggplot(aes(time, infected))+geom_point(col="red")+
+  geom_line(aes(time, I), col="blue")
+```
+
+
+
+
+
+
+
+Question 2: Likelihood and Posterior Calculation
+
+a) Function to calculate the model's likelihood:
+
+```{r}
+calculate_likelihood <- function(parameters, data) {
+  simulated_data <- simulate_SIR(parameters)
+  likelihood <- prod(dpois(simulated_data$I, lambda = simulated_data$infected))
+  return(likelihood)
+}
+
+calculate_log_likelihood <- function(parameters, data) {
+  likelihood <- calculate_likelihood(parameters, data)
+  log_likelihood <- log(likelihood)
+  return(log_likelihood)
+}
+
+```
+
+b) Function to calculate the model's posterior distribution:
+
+```{r}
+calculate_posterior <- function(parameters, data) {
+  prior_lambda <- dunif(parameters["lambda"], min = 0, max = 10)
+  prior_gamma <- dunif(parameters["gamma"], min = 0, max = 1)
+  prior <- prior_lambda * prior_gamma
+  likelihood <- calculate_likelihood(parameters, data)
+  posterior <- likelihood * prior
+  return(posterior)
+}
+
+calculate_log_posterior <- function(parameters, data) {
+  posterior <- calculate_posterior(parameters, data)
+  log_posterior <- log(posterior)
+  return(log_posterior)
+}
+
+```
+
+Question 3: Implementing the Metropolis-Hastings algorithm
+```{r}
+metropolis_hastings <- function(data, iterations, initial_theta) {
+  theta <- initial_theta
+  accepted_theta <- matrix(nrow = iterations, ncol = 2)
+  for (i in 1:iterations) {
+    theta_candidate <- proposal(theta)
+    log_alpha <- calculate_log_posterior(theta_candidate, data) - calculate_log_posterior(theta, data)
+    if (log(runif(1)) < log_alpha) {
+      theta <- theta_candidate
+      accepted_theta[i, ] <- theta
+    } else {
+      accepted_theta[i, ] <- theta
+    }
+  }
+  return(accepted_theta)
+}
+
+```
+
+
+Question 4: Applying the algorithm and checking convergence
+
+```{r}
+# Define initial parameters
+initial_theta <- c("lambda" = 1.7, "gamma" = 0.44)
+
+# Run Metropolis-Hastings algorithm
+iterations <- 10000
+accepted_theta <- metropolis_hastings(data, iterations, initial_theta)
+
+# Visualize trace plots
+par(mfrow=c(2,1))
+plot(accepted_theta[, "lambda"], type="l", xlab="Iteration", ylab="Lambda", main="Trace Plot for Lambda")
+plot(accepted_theta[, "gamma"], type="l", xlab="Iteration", ylab="Gamma", main="Trace Plot for Gamma")
+
+# Calculate Gelman-Rubin statistic
+gelman_rubin <- function(chain) {
+  m <- nrow(chain)
+  n <- ncol(chain)
+  
+  B <- n / (m - 1) * sum((colMeans(chain) - rowMeans(chain))^2)
+  W <- 1 / m * rowSums((chain - rowMeans(chain))^2)
+  
+  var_hat <- (1 - 1 / n) * W + 1 / n * B
+  R_hat <- sqrt(var_hat / mean(W))
+  
+  return(R_hat)
+}
+
+# Apply Gelman-Rubin statistic
+gelman_rubin_lambda <- gelman_rubin(accepted_theta[, "lambda"])
+gelman_rubin_gamma <- gelman_rubin(accepted_theta[, "gamma"])
+
+gelman_rubin_lambda
+gelman_rubin_gamma
+
+```
+
+
+
+
+

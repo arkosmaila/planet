@@ -1,0 +1,85 @@
+---
+title: "Test Prior Posterior Gaussian"
+output: html_document
+date: "2024-03-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## R Markdown
+This is a toy example to explore the relative influence of the prior and the number of observations on the posterior.  
+
+We take a toy example in which our data $X_{obs}(1...n)$ is gaussian, and the objective is to estimate its mean $\mu$, the variance is assumed known, equal to $\sigma^2$. We observe $n$ data points.
+
+
+```{r data}
+# true parameters
+mu=7 # we will try to recover it
+sigma2=3 # we assume it is known
+
+# number of observation
+n=50
+
+data=rnorm(n, mu, sigma2) # we create a simulated dataset
+mean(data)
+
+```
+
+
+We take a gaussian likelihood, with fixed variance equal to $\sigma^2$. 
+
+In the frequentist approach, we would estimate the mean by taking the empirical average on the data sample.
+
+In the bayesian framework, we have to assume a prior distribution for $\mu$. Let's assume it's a Gaussian distribution with mean $\mu_0$ and variance $\sigma_0^2$.
+
+
+```{r prior}
+###################
+# prior hyperparameters
+mu0=0
+sigma02=1
+
+
+get_prior=function(mu0, sigma02,x){
+  return(dnorm(x, mu0, sigma02))
+}
+```
+
+In this simple example, it can be proven that the posterior distribution is a Gaussian with mean $\frac{1}{\frac{1}{\sigma_0^2} + \frac{n}{\sigma^2}}*(\frac{\mu_0}{\sigma_0^2} + \frac{\sum_i X_{obs}(i)}{\sigma^2})$ and variance $(1/(1/\sigma_0^2 + n/\sigma^2))$
+
+
+```{r posterior}
+# POSTERIOR
+variance_posterior=function(mu0, sigma02, n, sigma2){
+  return(1/(1/sigma02 + n/sigma2))
+}
+mean_posterior=function(mu0, sigma02, n, sigma2, data){
+  return((1/(1/sigma02 + n/sigma2))*(mu0/sigma02 + sum(data)/sigma2))
+}
+
+get_posterior=function(mu0, sigma02, n, sigma2, data, x){
+  return(dnorm(x, mean_posterior(mu0, sigma02, n, sigma2, data), variance_posterior(mu0, sigma02, n, sigma2)))
+}
+```
+
+
+Plotting the results:
+
+```{r plot}
+
+library(ggplot2)
+library(dplyr)
+data.frame(x=seq(-10, 10, 0.001)) %>%
+  mutate(prior=get_prior(mu0, sigma02, x),
+         posterior=get_posterior(mu0, sigma02, n, sigma2, data, x))%>%
+  ggplot()+
+  geom_vline(aes(xintercept=mu))+
+  geom_line(aes(x=x, y=posterior, color="posterior"), lwd=1)+
+  geom_line(aes(x=x, y=prior, color="prior"), lwd=1)+
+  theme_bw()+labs(color="", y="density", x="")
+
+```
+
